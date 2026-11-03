@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Quiz App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-br from-indigo-900 to-purple-900 min-h-screen text-white flex items-center justify-center p-4">
+
+    <div class="bg-white/10 backdrop-blur-md p-8 rounded-2xl shadow-2xl w-full max-w-lg border border-white/20">
+        
+        <!-- 1. LOGIN SCREEN -->
+        <div id="login-screen" class="text-center">
+            <h1 class="text-3xl font-extrabold mb-2 text-yellow-400">⚡ Live Quiz Battle</h1>
+            <p class="text-gray-300 mb-6">Enter your name to join the game room!</p>
+            <input type="text" id="player-name" placeholder="Your Name..." class="w-full px-4 py-3 rounded-lg bg-white/20 border border-white/30 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-yellow-400 mb-4 text-center text-lg">
+            <button onclick="joinGame()" class="w-full bg-yellow-500 hover:bg-yellow-600 font-bold py-3 rounded-lg text-gray-900 transition duration-200 text-lg shadow-lg">Join Game</button>
+        </div>
+
+        <!-- 2. LOBBY SCREEN -->
+        <div id="lobby-screen" class="hidden text-center">
+            <h2 class="text-2xl font-bold mb-4 text-yellow-400">🎮 Game Lobby</h2>
+            <p class="text-gray-300 mb-4">Waiting for host to start the quiz...</p>
+            <div class="bg-black/30 p-4 rounded-lg mb-6 text-left">
+                <h3 class="font-semibold text-gray-400 mb-2">Connected Players:</h3>
+                <ul id="players-list" class="space-y-1 text-yellow-200 font-medium"></ul>
+            </div>
+            <button onclick="startQuiz()" class="w-full bg-green-500 hover:bg-green-600 font-bold py-3 rounded-lg text-white transition duration-200 text-lg shadow-lg">Start Quiz (Host)</button>
+        </div>
+
+        <!-- 3. QUIZ SCREEN -->
+        <div id="quiz-screen" class="hidden">
+            <div class="flex justify-between items-center mb-4 text-sm text-gray-300 font-semibold">
+                <span id="question-number">Question 1/4</span>
+                <span class="bg-red-500/20 text-red-300 px-3 py-1 rounded-full border border-red-500/30">⏱️ <span id="timer-count">10</span>s</span>
+            </div>
+            <h2 id="question-text" class="text-xl font-bold mb-6 text-white min-h-[60px]">Loading question...</h2>
+            
+            <div class="space-y-3" id="options-container">
+                <!-- Options will load dynamically -->
+            </div>
+            <div id="answer-feedback" class="mt-4 text-center font-semibold text-yellow-300 min-h-[24px]"></div>
+        </div>
+
+        <!-- 4. LEADERBOARD SCREEN -->
+        <div id="leaderboard-screen" class="hidden text-center">
+            <h1 class="text-3xl font-extrabold mb-4 text-yellow-400">🏆 Final Leaderboard</h1>
+            <p class="text-gray-300 mb-6">Here are the top champions!</p>
+            <div class="bg-black/30 p-4 rounded-lg mb-6">
+                <ul id="leaderboard-list" class="space-y-3"></ul>
+            </div>
+            <button onclick="location.reload()" class="w-full bg-purple-600 hover:bg-purple-700 font-bold py-3 rounded-lg text-white transition duration-200 shadow-lg">Play Again 🔄</button>
+        </div>
+
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let myName = '';
+        let countdownInterval = null;
+
+        function joinGame() {
+            const nameInput = document.getElementById('player-name').value.trim();
+            if (!nameInput) {
+                alert('Please enter your name!');
+                return;
+            }
+            myName = nameInput;
+            socket.emit('join_game', myName);
+
+            document.getElementById('login-screen').classList.add('hidden');
+            document.getElementById('lobby-screen').classList.remove('hidden');
+        }
+
+        socket.on('update_players', (players) => {
+            const list = document.getElementById('players-list');
+            list.innerHTML = '';
+            players.forEach(p => {
+                const li = document.createElement('li');
+                li.textContent = `🟢 ${p.name}`;
+                list.appendChild(li);
+            });
+        });
+
+        function startQuiz() {
+            socket.emit('start_quiz');
+        }
+
+        socket.on('next_question', (data) => {
+            document.getElementById('lobby-screen').classList.add('hidden');
+            document.getElementById('quiz-screen').classList.remove('hidden');
+            document.getElementById('answer-feedback').textContent = '';
+
+            document.getElementById('question-number').textContent = `Question ${data.questionNumber}/${data.totalQuestions}`;
+            document.getElementById('question-text').textContent = data.questionData.question;
+
+            const optionsContainer = document.getElementById('options-container');
+            optionsContainer.innerHTML = '';
+
+            const options = [
+                data.questionData.option1,
+                data.questionData.option2,
+                data.questionData.option3,
+                data.questionData.option4
+            ];
+
+            options.forEach(opt => {
+                const btn = document.createElement('button');
+                btn.textContent = opt;
+                btn.className = "w-full text-left px-4 py-3 bg-white/20 hover:bg-white/30 rounded-lg font-medium transition duration-200 border border-white/10";
+                btn.onclick = () => submitAnswer(opt, btn);
+                optionsContainer.appendChild(btn);
+            });
+
+            // Start 10 seconds client-side countdown timer
+            let timeLeft = data.timeLimit;
+            document.getElementById('timer-count').textContent = timeLeft;
+
+            if (countdownInterval) clearInterval(countdownInterval);
+
+            countdownInterval = setInterval(() => {
+                timeLeft--;
+                document.getElementById('timer-count').textContent = timeLeft;
+                if (timeLeft <= 0) {
+                    clearInterval(countdownInterval);
+                }
+            }, 1000);
+        });
+
+        function submitAnswer(selectedAnswer, buttonElement) {
+            // Disable all options once answered
+            const buttons = document.getElementById('options-container').querySelectorAll('button');
+            buttons.forEach(b => b.disabled = true);
+
+            buttonElement.classList.add('bg-yellow-500', 'text-gray-900', 'font-bold');
+            document.getElementById('answer-feedback').textContent = "✅ Answer submitted! Waiting for next question...";
+
+            // Send answer to server
+            socket.emit('submit_answer', { playerName: myName, answer: selectedAnswer });
+        }
+
+        socket.on('game_over', (leaderboard) => {
+            if (countdownInterval) clearInterval(countdownInterval);
+            document.getElementById('quiz-screen').classList.add('hidden');
+            document.getElementById('leaderboard-screen').classList.remove('hidden');
+
+            const list = document.getElementById('leaderboard-list');
+            list.innerHTML = '';
+
+            leaderboard.forEach((p, index) => {
+                const li = document.createElement('li');
+                li.className = "flex justify-between items-center bg-white/10 px-4 py-2 rounded-lg font-semibold";
+                li.innerHTML = `<span>#${index + 1} ${p.name}</span> <span class="text-yellow-400">${p.score} pts</span>`;
+                list.appendChild(li);
+            });
+        });
+    </script>
+</body>
+</html>
