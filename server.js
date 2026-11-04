@@ -1,14 +1,7 @@
-const dns = require('dns');
-
-// Render ke default DNS ko bypass karke Google & Cloudflare ke public DNS set karo
-dns.setServers(['8.8.8.8', '1.1.1.1']);
-dns.setDefaultResultOrder('ipv4first');
-
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { Pool } = require('pg');
-const { URL } = require('url');
+const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -25,53 +18,16 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// --- Public DNS Forced IPv4 Resolver ---
-const connectionString = process.env.DATABASE_URL;
-let realPool = null;
+// --- Initialize Supabase HTTP/HTTPS Client (Bypasses all TCP/IPv6 errors!) ---
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
-const pool = {
-    query: async (...args) => {
-        while (!realPool) {
-            await new Promise(r => setTimeout(r, 50));
-        }
-        return realPool.query(...args);
-    }
-};
-
-if (!connectionString) {
-    console.error("❌ CRITICAL ERROR: DATABASE_URL is not set in environment variables!");
-} else {
-    try {
-        const parsedUrl = new URL(connectionString);
-        const originalHost = parsedUrl.hostname;
-
-        console.log(`🔍 Resolving host using Public DNS: ${originalHost}`);
-
-        dns.lookup(originalHost, { family: 4 }, (err, ipv4Address) => {
-            if (!err && ipv4Address) {
-                console.log(`✅ SUCCESS: Public DNS resolved ${originalHost} to IPv4 -> ${ipv4Address}`);
-                parsedUrl.hostname = ipv4Address;
-            } else {
-                console.log(`⚠️ WARNING: DNS lookup failed (${err ? err.message : 'No IP found'}). Using hostname.`);
-            }
-
-            realPool = new Pool({
-                connectionString: parsedUrl.toString(),
-                ssl: {
-                    rejectUnauthorized: false,
-                    servername: originalHost
-                },
-                family: 4,
-                connectionTimeoutMillis: 10000
-            });
-
-            console.log("✅ Database connection pool initialized with IPv4.");
-        });
-    } catch (e) {
-        console.error("❌ Error parsing DATABASE_URL:", e.message);
-    }
+if (!supabaseUrl || !supabaseKey) {
+    console.error("❌ CRITICAL ERROR: Supabase URL or Anon Key is missing!");
 }
-// ----------------------------------------
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+console.log("✅ Supabase HTTPS client initialized successfully.");
 
 let players = [];
 let currentQuestionIndex = 0;
@@ -97,8 +53,12 @@ async function triggerNextQuestion() {
         }, 10000);
 
     } else {
+        // Game Over: Save scores using Supabase API
         for (let p of players) {
-            await pool.query('INSERT INTO scores (player_name, score) VALUES ($1, $2)', [p.name, p.score]);
+            const { error } = await supabase
+                .from('scores')
+                .insert([{ player_name: p.name, score: p.score }]);
+            if (error) console.error("Error saving score:", error.message);
         }
         
         const sortedLeaderboard = [...players].sort((a, b) => b.score - a.score);
@@ -117,8 +77,14 @@ io.on('connection', (socket) => {
 
     socket.on('start_quiz', async () => {
         try {
-            const result = await pool.query('SELECT id, question, option1, option2, option3, option4 FROM questions');
-            questionsList = result.rows;
+            // Fetch questions via Supabase HTTP API
+            const { data, error } = await supabase
+                .from('questions')
+                .select('id, question, option1, option2, option3, option4');
+
+            if (error) throw error;
+
+            questionsList = data;
             currentQuestionIndex = 0;
 
             if (questionsList.length > 0) {
@@ -132,10 +98,15 @@ io.on('connection', (socket) => {
     socket.on('submit_answer', async ({ playerName, answer }) => {
         try {
             const currentQ = questionsList[currentQuestionIndex];
-            const dbCheck = await pool.query('SELECT correct_answer FROM questions WHERE id = $1', [currentQ.id]);
-            const correctAnswer = dbCheck.rows[0].correct_answer;
+            const { data, error } = await supabase
+                .from('questions')
+                .select('correct_answer')
+                .eq('id', currentQ.id)
+                .single();
 
-            if (answer === correctAnswer) {
+            if (error) throw error;
+
+            if (data && answer === data.correct_answer) {
                 const player = players.find(p => p.id === socket.id);
                 if (player) {
                     player.score += 10;
