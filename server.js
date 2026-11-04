@@ -23,7 +23,8 @@ const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
         rejectUnauthorized: false
-    }
+    },
+    family: 4 // Yeh line force karegi ki sirf IPv4 use ho, IPv6 nahi!
 });
 
 let players = [];
