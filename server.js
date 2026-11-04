@@ -1,4 +1,7 @@
 const dns = require('dns');
+
+// Render ke default DNS ko bypass karke Google & Cloudflare ke public DNS set karo
+dns.setServers(['8.8.8.8', '1.1.1.1']);
 dns.setDefaultResultOrder('ipv4first');
 
 const express = require('express');
@@ -22,7 +25,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// --- Advanced IPv4 DNS Resolver & Proxy Pool for Render ---
+// --- Public DNS Forced IPv4 Resolver ---
 const connectionString = process.env.DATABASE_URL;
 let realPool = null;
 
@@ -42,14 +45,14 @@ if (!connectionString) {
         const parsedUrl = new URL(connectionString);
         const originalHost = parsedUrl.hostname;
 
-        console.log(`🔍 Attempting IPv4 DNS lookup for host: ${originalHost}`);
+        console.log(`🔍 Resolving host using Public DNS: ${originalHost}`);
 
         dns.lookup(originalHost, { family: 4 }, (err, ipv4Address) => {
             if (!err && ipv4Address) {
-                console.log(`✅ SUCCESS: Resolved ${originalHost} to IPv4 -> ${ipv4Address}`);
+                console.log(`✅ SUCCESS: Public DNS resolved ${originalHost} to IPv4 -> ${ipv4Address}`);
                 parsedUrl.hostname = ipv4Address;
             } else {
-                console.log(`⚠️ WARNING: IPv4 lookup failed (${err ? err.message : 'No IP found'}). Using original hostname.`);
+                console.log(`⚠️ WARNING: DNS lookup failed (${err ? err.message : 'No IP found'}). Using hostname.`);
             }
 
             realPool = new Pool({
@@ -62,13 +65,13 @@ if (!connectionString) {
                 connectionTimeoutMillis: 10000
             });
 
-            console.log("✅ Database connection pool initialized.");
+            console.log("✅ Database connection pool initialized with IPv4.");
         });
     } catch (e) {
         console.error("❌ Error parsing DATABASE_URL:", e.message);
     }
 }
-// ----------------------------------------------------------
+// ----------------------------------------
 
 let players = [];
 let currentQuestionIndex = 0;
