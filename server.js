@@ -22,13 +22,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// --- Bulletproof IPv4 DNS Resolution for Render ---
-const parsedUrl = new URL(process.env.DATABASE_URL);
-const originalHost = parsedUrl.hostname;
-
+// --- Advanced IPv4 DNS Resolver & Proxy Pool for Render ---
+const connectionString = process.env.DATABASE_URL;
 let realPool = null;
 
-// Proxy pool object taaki baaki code me pool.query as it is kaam kare
 const pool = {
     query: async (...args) => {
         while (!realPool) {
@@ -38,54 +35,65 @@ const pool = {
     }
 };
 
-// Explicitly resolve hostname to IPv4 to bypass Render IPv6 constraints
-dns.lookup(originalHost, { family: 4 }, (err, ipv4Address) => {
-    if (!err && ipv4Address) {
-        console.log(`✅ Successfully resolved ${originalHost} to IPv4: ${ipv4Address}`);
-        parsedUrl.hostname = ipv4Address;
-    } else {
-        console.log(`⚠️ DNS lookup fallback to original host: ${originalHost}`);
-    }
+if (!connectionString) {
+    console.error("❌ CRITICAL ERROR: DATABASE_URL is not set in environment variables!");
+} else {
+    try {
+        const parsedUrl = new URL(connectionString);
+        const originalHost = parsedUrl.hostname;
 
-    realPool = new Pool({
-        connectionString: parsedUrl.toString(),
-        ssl: {
-            rejectUnauthorized: false,
-            servername: originalHost // Zaroori hai jab IP address direct use ho
-        },
-        family: 4
-    });
-});
-// --------------------------------------------------
+        console.log(`🔍 Attempting IPv4 DNS lookup for host: ${originalHost}`);
+
+        dns.lookup(originalHost, { family: 4 }, (err, ipv4Address) => {
+            if (!err && ipv4Address) {
+                console.log(`✅ SUCCESS: Resolved ${originalHost} to IPv4 -> ${ipv4Address}`);
+                parsedUrl.hostname = ipv4Address;
+            } else {
+                console.log(`⚠️ WARNING: IPv4 lookup failed (${err ? err.message : 'No IP found'}). Using original hostname.`);
+            }
+
+            realPool = new Pool({
+                connectionString: parsedUrl.toString(),
+                ssl: {
+                    rejectUnauthorized: false,
+                    servername: originalHost
+                },
+                family: 4,
+                connectionTimeoutMillis: 10000
+            });
+
+            console.log("✅ Database connection pool initialized.");
+        });
+    } catch (e) {
+        console.error("❌ Error parsing DATABASE_URL:", e.message);
+    }
+}
+// ----------------------------------------------------------
 
 let players = [];
 let currentQuestionIndex = 0;
 let questionsList = [];
 let questionTimer = null;
 
-// Function to handle auto-progressing questions
 async function triggerNextQuestion() {
     if (questionTimer) clearTimeout(questionTimer);
 
     if (currentQuestionIndex < questionsList.length) {
         const currentQ = questionsList[currentQuestionIndex];
         
-        // Broadcast question to all players with a 10-second duration
         io.emit('next_question', {
             questionData: currentQ,
             questionNumber: currentQuestionIndex + 1,
             totalQuestions: questionsList.length,
-            timeLimit: 10 // 10 seconds
+            timeLimit: 10
         });
 
-        // Server-side timer: Automatically move to next question after 10 seconds
         questionTimer = setTimeout(async () => {
             currentQuestionIndex++;
             await triggerNextQuestion();
-        }, 10000); // 10 seconds
+        }, 10000);
 
     } else {
-        // Game Over: Save scores & show leaderboard
         for (let p of players) {
             await pool.query('INSERT INTO scores (player_name, score) VALUES ($1, $2)', [p.name, p.score]);
         }
@@ -127,7 +135,7 @@ io.on('connection', (socket) => {
             if (answer === correctAnswer) {
                 const player = players.find(p => p.id === socket.id);
                 if (player) {
-                    player.score += 10; // 10 points for correct answer
+                    player.score += 10;
                 }
             }
         } catch (err) {
