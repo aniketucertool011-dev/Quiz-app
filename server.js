@@ -5,6 +5,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { Pool } = require('pg');
+const { URL } = require('url');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -21,14 +22,41 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// PostgreSQL Connection using Connection String & SSL for Cloud
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
-    },
-    family: 4 // Yeh line force karegi ki sirf IPv4 use ho, IPv6 nahi!
+// --- Bulletproof IPv4 DNS Resolution for Render ---
+const parsedUrl = new URL(process.env.DATABASE_URL);
+const originalHost = parsedUrl.hostname;
+
+let realPool = null;
+
+// Proxy pool object taaki baaki code me pool.query as it is kaam kare
+const pool = {
+    query: async (...args) => {
+        while (!realPool) {
+            await new Promise(r => setTimeout(r, 50));
+        }
+        return realPool.query(...args);
+    }
+};
+
+// Explicitly resolve hostname to IPv4 to bypass Render IPv6 constraints
+dns.lookup(originalHost, { family: 4 }, (err, ipv4Address) => {
+    if (!err && ipv4Address) {
+        console.log(`✅ Successfully resolved ${originalHost} to IPv4: ${ipv4Address}`);
+        parsedUrl.hostname = ipv4Address;
+    } else {
+        console.log(`⚠️ DNS lookup fallback to original host: ${originalHost}`);
+    }
+
+    realPool = new Pool({
+        connectionString: parsedUrl.toString(),
+        ssl: {
+            rejectUnauthorized: false,
+            servername: originalHost // Zaroori hai jab IP address direct use ho
+        },
+        family: 4
+    });
 });
+// --------------------------------------------------
 
 let players = [];
 let currentQuestionIndex = 0;
@@ -114,7 +142,7 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-    console.log(`🚀 Quiz Server running on http://localhost:${PORT}`);
+    console.log(`🚀 Quiz Server running on port ${PORT}`);
 });
